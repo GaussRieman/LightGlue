@@ -514,21 +514,8 @@ def dedupe_units(img_series:list, Hs:list, img_boxes:list):
             
 
 
-def process_image_folder(img_dir:str, model_name:str, model_version:str, feature_type:str="ALIKED"):
-    """
-    This function will read the images from the folder and process them.
-    """
-    # read the images
-    img_series = []
-    img_paths = []
-    img_paths = glob.glob(img_dir + "/*.jpg")
-    img_paths = sorted(img_paths, key=sort_key_func)
-    print("img_paths: ", img_paths)
-    for img_path in img_paths:
-        img = cv2.imread(img_path)
-        img_series.append(img)
-        
-    output_dir = os.path.join(img_dir, "output")
+def process_image_series(img_series:np.ndarray, model_name:str, model_version:str, 
+                         feature_type:str="ALIKED", output_dir:str=None):
     os.makedirs(output_dir, exist_ok=True)
     
     # get the homographies
@@ -553,6 +540,29 @@ def process_image_folder(img_dir:str, model_name:str, model_version:str, feature
             else:
                 cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 5)
             cv2.imwrite(f"{output_dir}/{i}.jpg", img)
+    
+    return (img_series, Hs, box_delete_flags)
+
+
+
+def process_image_folder(img_dir:str, model_name:str, model_version:str, feature_type:str="ALIKED"):
+    """
+    This function will read the images from the folder and process them.
+    """
+    # read the images
+    img_series = []
+    img_paths = []
+    img_paths = glob.glob(img_dir + "/*.jpg")
+    img_paths = sorted(img_paths, key=sort_key_func)
+    print("img_paths: ", img_paths)
+    for img_path in img_paths:
+        img = cv2.imread(img_path)
+        img_series.append(img)
+        
+    output_dir = os.path.join(img_dir, "output")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    img_series, Hs, box_delete_flags = process_image_series(img_series, model_name, model_version, feature_type, output_dir)
     
     return (img_series, Hs, box_delete_flags)
 
