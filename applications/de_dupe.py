@@ -33,7 +33,7 @@ from utils.faster_infer import TritonClientGRPC, UnitDetector
 
 # Parameters and constants
 TRT_URL = os.environ.get("TRT_URL", "localhost:8001")
-VALIAD_POINTS_THRESHOLD = 0.6 # % of the points should be valid after filtering
+VALIAD_POINTS_THRESHOLD = 0.3 # % of the points should be valid after filtering
 DEDUPE_IOU_THRESHOLD = 0.5 # % of the points should be valid after filtering
 
 
@@ -314,6 +314,32 @@ def iof(box1, box2):
     return intersection / foreground
 
 
+def iou_poly(poly1:list, poly2:list):  
+    """  
+    This function will calculate the intersection over union of two polygons.  
+    """  
+    poly1 = np.array(poly1).reshape((-1, 1, 2)).astype(np.int32)  
+    poly2 = np.array(poly2).reshape((-1, 1, 2)).astype(np.int32)  
+  
+    intersection_area, _ = cv2.intersectConvexConvex(poly1, poly2)  
+    area1 = cv2.contourArea(poly1)  
+    area2 = cv2.contourArea(poly2)  
+    union_area = area1 + area2 - intersection_area  
+  
+    return intersection_area / union_area
+
+
+def iof_poly(poly1:list, poly2:list):
+    """
+    This function will calculate the intersection over foreground of two polygons.
+    """
+    poly1 = np.array(poly1).reshape((-1, 1, 2)).astype(np.int32)
+    poly2 = np.array(poly2).reshape((-1, 1, 2)).astype(np.int32)
+    
+    intersection_area, _ = cv2.intersectConvexConvex(poly1, poly2)
+    area1 = cv2.contourArea(poly1)
+    return intersection_area / area1
+
 
 def detect_units(img_series:list, model_name:str, model_version:str):
     grpc_client = TritonClientGRPC(TRT_URL)
@@ -402,20 +428,38 @@ def dedupe_units(img_series:list, Hs:list, img_boxes:list):
         
         # get the bounding box of the contour
         x, y, w, h = cv2.boundingRect(contour)
+        poly_contour = cv2.approxPolyDP(contour, 0.01*cv2.arcLength(contour, True), True)
         
         # get the boxes in the current image
         box_to_dedupe = []
+        
+        ### POLY IOF
         for k, box in enumerate(img_boxes_curr):
             x1, y1, x2, y2 = box
-            img_countor_iof = iof([x1, y1, x2, y2], [x, y, x+w, y+h])
-            if img_countor_iof > 0.99:
+            poly_box = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
+            poly_box = poly_box.reshape((-1, 1, 2))
+            box_contour_iof = iof_poly(poly_box, poly_contour)
+            if box_contour_iof > 0.99:
                 delete_flag[k] = 1
                 continue
-            elif img_countor_iof < 0.01:
+            elif box_contour_iof < 0.01:
                 delete_flag[k] = 0
             else:
                 delete_flag[k] = 0
                 box_to_dedupe.append(k)
+        
+        ### BOX IOF
+        # for k, box in enumerate(img_boxes_curr):
+        #     x1, y1, x2, y2 = box
+        #     img_countor_iof = iof([x1, y1, x2, y2], [x, y, x+w, y+h])
+        #     if img_countor_iof > 0.99:
+        #         delete_flag[k] = 1
+        #         continue
+        #     elif img_countor_iof < 0.01:
+        #         delete_flag[k] = 0
+        #     else:
+        #         delete_flag[k] = 0
+        #         box_to_dedupe.append(k)
         # print("box_to_dedupe: ", len(box_to_dedupe), "box_remained: ", delete_flag.count(0))
         
         warped_boxes = []
@@ -425,22 +469,43 @@ def dedupe_units(img_series:list, Hs:list, img_boxes:list):
             warped_box = cv2.perspectiveTransform(np.array([[[x1, y1], [x2, y1], [x2, y2], [x1, y2]]], dtype=np.float32), H_pre_inv)
             warped_boxes.append(warped_box)
         
-        # get the intersection over union of the boxes in the previous image
+        ### POLY IOU
+        ### get the iou of box poly with the previous image box polys
         for box_idx, warped_box in zip(box_to_dedupe, warped_boxes):
-            # print("warped_box: ", warped_box)
             x1, y1 = warped_box[0][0]
             x2, y2 = warped_box[0][2]
-            # print("x1, y1, x2, y2: ", x1, y1, x2, y2)
             max_iou = 0
+            box_poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
+            box_poly = box_poly.reshape((-1, 1, 2))
             for box in img_boxes_prev:
-                iou_score = iou([x1, y1, x2, y2], box)
+                prev_box_poly = np.array([[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]], dtype=np.int32)
+                prev_box_poly = prev_box_poly.reshape((-1, 1, 2))
+                iou_score = iou_poly(box_poly, prev_box_poly)
                 if iou_score > max_iou:
                     max_iou = iou_score
                 if max_iou > DEDUPE_IOU_THRESHOLD:
                     break
-            # print("max_iou: ", max_iou)
             if max_iou > DEDUPE_IOU_THRESHOLD:
                 delete_flag[box_idx] = 1
+                
+        
+        ### BOX IOU 
+        ### get the intersection over union of the boxes in the previous image
+        # for box_idx, warped_box in zip(box_to_dedupe, warped_boxes):
+        #     # print("warped_box: ", warped_box)
+        #     x1, y1 = warped_box[0][0]
+        #     x2, y2 = warped_box[0][2]
+        #     # print("x1, y1, x2, y2: ", x1, y1, x2, y2)
+        #     max_iou = 0
+        #     for box in img_boxes_prev:
+        #         iou_score = iou([x1, y1, x2, y2], box)
+        #         if iou_score > max_iou:
+        #             max_iou = iou_score
+        #         if max_iou > DEDUPE_IOU_THRESHOLD:
+        #             break
+        #     # print("max_iou: ", max_iou)
+        #     if max_iou > DEDUPE_IOU_THRESHOLD:
+        #         delete_flag[box_idx] = 1
         
         box_delete_flags.append(delete_flag)
         print("Original boxes: ", len(img_boxes_curr), "Deleted boxes: ", sum(delete_flag))
@@ -504,7 +569,7 @@ def main():
     # img1 = cv2.imread(img1_path)
     # match_pair(img0, img1)
     
-    img_dir = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/osa_images/2488/Fem/AI - Always/Always Fem Pads"
+    img_dir = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/osa_images/2488/Home cleaning/Cascade Auto Dish"
     model_name = "unit_hpc_yolo_v5"
     model_version = "20230107"
     feature_type = "ALIKED" # ALIKED, ORB, SIFT
