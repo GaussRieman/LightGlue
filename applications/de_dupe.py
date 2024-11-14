@@ -15,6 +15,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import tqdm
 import glob
+import shutil
 
 logger = loguru.logger
 logger.add(sys.stdout, format="{time} {level} {message}", filter="my_module", level="DEBUG")
@@ -35,7 +36,69 @@ from utils.faster_infer import TritonClientGRPC, UnitDetector
 TRT_URL = os.environ.get("TRT_URL", "localhost:8001")
 VALIAD_POINTS_THRESHOLD = 0.3 # % of the points should be valid after filtering
 DEDUPE_IOU_THRESHOLD = 0.5 # % of the points should be valid after filtering
+Y_GAP_RATIO_THRESHOLD = 0.7 # % of the gap ratio along the y-axis
+MEAN_DIFF_THRESHOLD = 0.005 # 3/640=0.0046875, toleration of the gap along the y-axis
 
+
+def validate_points_by_units(points0:np.ndarray, points1:np.ndarray, 
+                             img0:np.ndarray, img1:np.ndarray, 
+                             boxes0:list, boxes1)->np.ndarray:
+    print("Original img0: ", img0.shape)
+    cond = []
+    # create a mask where there is a unit
+    mask0 = np.zeros(img0.shape[:2], dtype=np.uint8)
+    mask1 = np.zeros(img1.shape[:2], dtype=np.uint8)
+    for box in boxes0:
+        x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+        mask0[y1:y2, x1:x2] = 255
+    
+    for box in boxes1:
+        x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+        mask1[y1:y2, x1:x2] = 255
+    
+    cv2.imwrite("mask0.jpg", mask0)
+    # filter out the points which are not in the mask
+    for p,q in zip(points0, points1):
+        x0, y0 = int(p[0]), int(p[1])
+        x1, y1 = int(q[0]), int(q[1])
+        # print("mask: ", mask0[y0, x0], mask1[y1, x1])
+        if mask0[y0, x0] == 255 and mask1[y1, x1] == 255:
+            cond.append(True)
+        else:
+            cond.append(False)
+            
+    points0 = points0[cond]
+    points1 = points1[cond]
+    # print("Filter by mask points0: ", points0.shape)
+    
+    # calculate the ratio of gap along the y-axis
+    y_coords0 = points0[:, 1]/img0.shape[0]
+    y_coords0.sort()
+    y_coords1 = points1[:, 1]/img1.shape[0]
+    y_coords1.sort()
+    # print("y_coords0: ", y_coords0)
+    y_diff0 = np.diff(y_coords0)
+    y_diff1 = np.diff(y_coords1)
+    
+    # filter out the near diffs
+    y_diff0 = y_diff0[y_diff0 > MEAN_DIFF_THRESHOLD]
+    y_diff1 = y_diff1[y_diff1 > MEAN_DIFF_THRESHOLD]
+    # print("y_diff0: ", y_diff0)
+    # print("y_diff1: ", y_diff1)
+    y_gap0 = np.sum(y_diff0)
+    y_gap1 = np.sum(y_diff1)
+    
+    box_y_range0 = (np.max(boxes0, axis=0)[3] - np.min(boxes0, axis=0)[1])/img0.shape[0]
+    box_y_range1 = (np.max(boxes1, axis=0)[3] - np.min(boxes1, axis=0)[1])/img1.shape[0]
+    # print("box_y_range0: ", box_y_range0, box_y_range1)
+    y_gap_ratio0 = y_gap0/box_y_range0
+    y_gap_ratio1 = y_gap1/box_y_range1
+    
+    gap_ratio = (y_gap_ratio0 + y_gap_ratio1)/2
+    return points0, points1, gap_ratio
+
+   
+        
 
 def filter_points(src_points:np.ndarray, dst_points, img_h, img_w)->np.ndarray:
     """
@@ -87,7 +150,7 @@ def filter_points(src_points:np.ndarray, dst_points, img_h, img_w)->np.ndarray:
     return src_points, dst_points, valid_points/total_points
 
 
-def match_pair(img0:np.ndarray, img1:np.ndarray, feature_type:str) -> np.ndarray:
+def match_pair(img0:np.ndarray, img1:np.ndarray, boxes0:list, boxes1:list, feature_type:str) -> np.ndarray:
     """
     This function will take two images and return the overlapping areas.
     """
@@ -172,11 +235,26 @@ def match_pair(img0:np.ndarray, img1:np.ndarray, feature_type:str) -> np.ndarray
     print("feature & match time: ", t1-t0)
 
     # filter the points
+    # change box from original to resized
     points0, points1, valid_ratio = filter_points(points0, points1, img0.shape[0], img0.shape[1])
     if valid_ratio < VALIAD_POINTS_THRESHOLD:
         return np.eye(3), points0, points1
     
     if points0.shape[0] < 4:
+        return np.eye(3), points0, points1
+    
+    # validate the points by the units
+    resized_boxes0 = []
+    resized_boxes1 = []
+    for i, box in enumerate(boxes0):
+        resized_boxes0.append([box[0]/scale_x, box[1]/scale_y, box[2]/scale_x, box[3]/scale_y])
+        
+    for i, box in enumerate(boxes1):
+        resized_boxes1.append([box[0]/scale_x, box[1]/scale_y, box[2]/scale_x, box[3]/scale_y])
+
+    points0, points1, gap_ratio = validate_points_by_units(points0, points1, img0, img1, resized_boxes0, resized_boxes1)
+    if gap_ratio > Y_GAP_RATIO_THRESHOLD:
+        print("Filtered by gap ratio.")
         return np.eye(3), points0, points1
     
     try:
@@ -202,7 +280,7 @@ def match_pair(img0:np.ndarray, img1:np.ndarray, feature_type:str) -> np.ndarray
 
 
 
-def get_homographies(img_series:np.ndarray, feature_type:str, output_dir:str):
+def get_homographies(img_series:np.ndarray, img_boxes:list, feature_type:str, output_dir:str):
     """
     This function will take a series of images and return the overlapping areas.
     """
@@ -215,7 +293,9 @@ def get_homographies(img_series:np.ndarray, feature_type:str, output_dir:str):
         print("Processing: ", i, i+1)
         img0 = img_series[i]
         img1 = img_series[i+1]
-        H, pts0, pts1 = match_pair(img0, img1, feature_type)
+        boxes0 = img_boxes[i]
+        boxes1 = img_boxes[i+1]
+        H, pts0, pts1 = match_pair(img0, img1, boxes0, boxes1, feature_type)
         Hs.append(H)
         
         # DEBUG
@@ -518,13 +598,13 @@ def process_image_series(img_series:np.ndarray, model_name:str, model_version:st
                          feature_type:str="ALIKED", output_dir:str=None):
     os.makedirs(output_dir, exist_ok=True)
     
-    # get the homographies
-    Hs = get_homographies(np.array(img_series), feature_type, output_dir)
-    # print("Hs: ", Hs)
-    draw_overlap_area(img_series, Hs, output_dir)
-    
     # detect the units
     img_boxes = detect_units(img_series, model_name, model_version)
+    
+    # get the homographies
+    Hs = get_homographies(np.array(img_series), img_boxes, feature_type, output_dir)
+    # print("Hs: ", Hs)
+    draw_overlap_area(img_series, Hs, output_dir)
     
     # dedupe the units
     box_delete_flags = dedupe_units(img_series, Hs, img_boxes)
@@ -560,6 +640,8 @@ def process_image_folder(img_dir:str, model_name:str, model_version:str, feature
         img_series.append(img)
         
     output_dir = os.path.join(img_dir, "output")
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     
     img_series, Hs, box_delete_flags = process_image_series(img_series, model_name, model_version, feature_type, output_dir)
@@ -568,22 +650,54 @@ def process_image_folder(img_dir:str, model_name:str, model_version:str, feature
 
 
 
+def find_image_folders(root_folder):  
+    image_extensions = ['jpg', 'jpeg', 'png', 'gif']  
+  
+    folders_with_images = []  
+    for dirpath, dirnames, filenames in os.walk(root_folder):  
+        if any(glob.glob(os.path.join(dirpath, f'*.{ext}')) for ext in image_extensions):  
+            folders_with_images.append(dirpath)  
+              
+    return folders_with_images  
+
+
+
+def process_OSA_data(data_path:str, model_name:str, model_version:str, feature_type:str="ALIKED"):
+    #1. get the image folders recursively
+    folders = find_image_folders(data_path)
+    print("folders: ", len(folders))
+    for folder in folders:
+        print("Processing: ", folder)
+        process_image_folder(folder, model_name, model_version, feature_type)
+
+
+
 def main():
+    # Prepare the input
     csv_file = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/OSA_Original_Image.csv"
     img_dir = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/osa_images"
     # prepare_input(csv_file, img_dir)
     
+    
+    # Process a pair of images
     # img0_path = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/osa_images/2488/Home cleaning/Mr Clean/42.jpg"
     # img1_path = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/osa_images/2488/Home cleaning/Mr Clean/43.jpg"
     # img0 = cv2.imread(img0_path)
     # img1 = cv2.imread(img1_path)
     # match_pair(img0, img1)
     
-    img_dir = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/osa_images/2488/Home cleaning/Cascade Auto Dish"
+    
+    # Process a folder
+    img_dir = "/datadrive/codes/retail/cvtoolkit/download/Fem Care"
     model_name = "unit_hpc_yolo_v5"
     model_version = "20230107"
     feature_type = "ALIKED" # ALIKED, ORB, SIFT
     process_image_folder(img_dir, model_name, model_version, feature_type)
+    
+    
+    # Process OSA
+    data_path = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/osa_images"
+    # process_OSA_data(data_path, model_name, model_version, feature_type)
 
 
 
