@@ -545,5 +545,5 @@ if __name__ == "__main__":
     # req_path = "/datadrive/codes/opensource/features/LightGlue/assets/uspg_test_jsons/4c89ccd3-5978-4d74-8764-7daf9d35cdda_input.json"
     # stitch(req_path)
     
-    stitch_local("/datadrive/codes/retail/ultralytics/stitch/output/imgs")
+    stitch_local("/datadrive/codes/retail/cvtoolkit/download/Fem Care")
     
