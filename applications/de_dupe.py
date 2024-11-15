@@ -10,7 +10,7 @@ import time
 import sys
 import os
 import loguru
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, DBSCAN
 import pandas as pd
 import matplotlib.pyplot as plt
 import tqdm
@@ -56,7 +56,7 @@ def validate_points_by_units(points0:np.ndarray, points1:np.ndarray,
         x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
         mask1[y1:y2, x1:x2] = 255
     
-    cv2.imwrite("mask0.jpg", mask0)
+    # cv2.imwrite("mask0.jpg", mask0)
     # filter out the points which are not in the mask
     for p,q in zip(points0, points1):
         x0, y0 = int(p[0]), int(p[1])
@@ -98,15 +98,50 @@ def validate_points_by_units(points0:np.ndarray, points1:np.ndarray,
     return points0, points1, gap_ratio
 
    
-        
 
-def filter_points(src_points:np.ndarray, dst_points, img_h, img_w)->np.ndarray:
+def filter_by_x_coords(src_points:np.ndarray, dst_points, img_h, img_w)->np.ndarray:
     """
     This function will take the points and filter out the points according to some criteria.
     """
+    print("img_h: ", img_h, "img_w: ", img_w)
     total_points = src_points.shape[0]
+    # x_coords_0 = src_points[:, 0]/img_w
+    # x_coords_1 = dst_points[:, 0]/img_w
+    # # calculate the distance from x0 to x1
+    # x_dist = np.abs((1-x_coords_0) + x_coords_1)
+    # # print("BEFORE x_dist: ", x_dist)
     
-    # Criteria 1: constrain the src_points to be with [0.7, 1]*width
+    # #apply DBSCAN clustering
+    # try:
+    #     dbscan = DBSCAN(eps=0.01, min_samples=4).fit(x_dist.reshape(-1, 1))
+        
+    #     # find the cluster with lowest mean distance
+    #     labels = dbscan.labels_
+    #     labels = labels + 1
+    #     unique_labels = np.unique(labels)
+    #     major_cluster = -1
+    #     main_dist = 1000
+    #     standard_dev = 0
+    #     for label in unique_labels:
+    #         cond = labels == label
+    #         mean_dist = np.mean(x_dist[cond])
+    #         std_dev = np.std(x_dist[cond])
+    #         if mean_dist < main_dist:
+    #             main_dist = mean_dist
+    #             major_cluster = label
+    #             standard_dev = std_dev
+
+    #     # print("main_dist: ", main_dist, "standard_dev: ", standard_dev)
+    #     cond = labels == major_cluster
+    #     src_points = src_points[cond]
+    #     dst_points = dst_points[cond]
+    #     x_dist = x_dist[cond]
+    #     # print("AFTER x_dist: ", x_dist)
+    # except Exception as e:
+    #     print("Error: ", e)
+    #     return src_points, dst_points, 0
+    
+    # Criteria 1: constrain the src_points to be with [0.6, 1]*width
     x_threshold = int(0.6*img_w)
     # print("x_threshold: ", x_threshold, src_points.shape)
     cond = (src_points[:, 0] > x_threshold) & (src_points[:, 0] < img_w)
@@ -116,10 +151,10 @@ def filter_points(src_points:np.ndarray, dst_points, img_h, img_w)->np.ndarray:
     # print("src_points: ", src_points.shape)
     
     
-    # Criteria 1: constrain the dst_points to be with [0.7, 1]*width
+    # Criteria 2: constrain the dst_points to be with [0, 0.4]*width
     x_threshold = int(0.4*img_w)
     # print("x_threshold: ", x_threshold, dst_points.shape)
-    cond = (dst_points[:, 0] < img_w) & (dst_points[:, 0] < x_threshold)
+    cond = dst_points[:, 0] < x_threshold
     dst_points = dst_points[cond]
     src_points = src_points[cond]
     # print("dst_points: ", dst_points.shape)
@@ -142,12 +177,13 @@ def filter_points(src_points:np.ndarray, dst_points, img_h, img_w)->np.ndarray:
     # cond = labels == main_cluster_index
     # src_points = src_points[cond]
     # dst_points = dst_points[cond]
-    # print("dst_points: ", dst_points.shape)
-    # print("src_points: ", src_points.shape)
+    print("dst_points: ", dst_points.shape)
+    print("src_points: ", src_points.shape)
 
     valid_points = src_points.shape[0]
     print("Total points: ", total_points, "Valid points: ", valid_points, "Percentage: ", valid_points/total_points)
     return src_points, dst_points, valid_points/total_points
+
 
 
 def match_pair(img0:np.ndarray, img1:np.ndarray, boxes0:list, boxes1:list, feature_type:str) -> np.ndarray:
@@ -236,11 +272,9 @@ def match_pair(img0:np.ndarray, img1:np.ndarray, boxes0:list, boxes1:list, featu
 
     # filter the points
     # change box from original to resized
-    points0, points1, valid_ratio = filter_points(points0, points1, img0.shape[0], img0.shape[1])
+    valid_ratio = 1
+    points0, points1, valid_ratio = filter_by_x_coords(points0, points1, img0.shape[0], img0.shape[1])
     if valid_ratio < VALIAD_POINTS_THRESHOLD:
-        return np.eye(3), points0, points1
-    
-    if points0.shape[0] < 4:
         return np.eye(3), points0, points1
     
     # validate the points by the units
@@ -252,9 +286,14 @@ def match_pair(img0:np.ndarray, img1:np.ndarray, boxes0:list, boxes1:list, featu
     for i, box in enumerate(boxes1):
         resized_boxes1.append([box[0]/scale_x, box[1]/scale_y, box[2]/scale_x, box[3]/scale_y])
 
+    gap_ratio = 0
     points0, points1, gap_ratio = validate_points_by_units(points0, points1, img0, img1, resized_boxes0, resized_boxes1)
+    print("Y Gap ratio: ", gap_ratio, "Points0: ", points0.shape, "Points1: ", points1.shape)
     if gap_ratio > Y_GAP_RATIO_THRESHOLD:
         print("Filtered by gap ratio.")
+        return np.eye(3), points0, points1
+    
+    if points0.shape[0] < 4:
         return np.eye(3), points0, points1
     
     try:
@@ -688,7 +727,7 @@ def main():
     
     
     # Process a folder
-    img_dir = "/datadrive/codes/retail/cvtoolkit/download/Fem Care"
+    img_dir = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/osa_images/Fem Care"
     model_name = "unit_hpc_yolo_v5"
     model_version = "20230107"
     feature_type = "ALIKED" # ALIKED, ORB, SIFT
