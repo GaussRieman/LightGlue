@@ -52,6 +52,7 @@ def parse_jpeg(content):
     return jpeg, (w, h)
 
 
+
 def download(url, parse_func, num_retry):
     path = Path(DOWNLOAD_CACHE_DIR) / f'{Path(url).name}'
     print("path: ", path)
@@ -76,11 +77,13 @@ def download(url, parse_func, num_retry):
     return None
 
 
+
 def download_and_parse(urls, parse_func, num_retry, num_workers):
     with ThreadPoolExecutor(num_workers) as pool:
         result = pool.map(functools.partial(download, parse_func=parse_func, num_retry=num_retry), urls)
     result = [v for v in result if v is not None]
     return result if len(result) == len(urls) else None
+
 
 
 def parse_req(req):
@@ -143,6 +146,8 @@ def parse_req(req):
             Hs.append(H)
     return imgs, Hs, unsorted_names, img_size
 
+
+
 def get_boundingBox(Hs, corners):
     ## Get offset and size
     pts = []
@@ -153,6 +158,7 @@ def get_boundingBox(Hs, corners):
     rect = cv2.boundingRect(pts)
     print("rect", rect)
     return rect
+
 
 
 def verify_corners(corners):
@@ -220,6 +226,7 @@ def adjust_roi(homographies, corners, max_size):
     return homographies, dl, dt, dw, dh
 
 
+
 def calculate_homography(imgs):
     Homographies = []
     num_imgs = len(imgs)
@@ -260,6 +267,7 @@ def calculate_homography(imgs):
         H = np.dot(Hs[-1], np.float32(Homographies[i]).reshape(3, 3))
         Hs.append(H)
     return Hs
+
 
 
 def rectify_horizontally(homographies, corners):
@@ -351,6 +359,8 @@ def rectify_horizontally(homographies, corners):
     T = cv2.getPerspectiveTransform(src_pts, dst_pts)
     homographies = [np.dot(T, H) for H in homographies]
     return homographies
+
+
 
 def rectify_vertically(homographies, corners):
 
@@ -451,12 +461,14 @@ def sort_key_func(item):
     num = os.path.splitext(base_name)[0]  # remove extension  
     return int(num)  
 
+
+
 def read_local_imgs(img_path):
     imgs = []
     img_files = glob.glob(img_path + "/*.jpg")
     img_files = sorted(img_files, key=sort_key_func)
 
-    sep = 3
+    sep = 1
     img_files_new = []
     for i in range(len(img_files)):
         if i % sep == 0:
@@ -467,6 +479,7 @@ def read_local_imgs(img_path):
         img = cv2.imread(img_file)
         imgs.append(img)
     return imgs
+
 
 
 def stitch_local(img_folder):
@@ -506,6 +519,7 @@ def stitch_local(img_folder):
     cv2.imwrite("stitch.jpg", pano)
 
 
+
 def stitch(req_path):
     req = json.load(open(req_path))
     imgs, Hs, unsorted_names, img_size = parse_req(req)
@@ -541,9 +555,11 @@ def stitch(req_path):
 
     cv2.imwrite("stitch.jpg", pano)
 
+
+
 if __name__ == "__main__":
     # req_path = "/datadrive/codes/opensource/features/LightGlue/assets/uspg_test_jsons/4c89ccd3-5978-4d74-8764-7daf9d35cdda_input.json"
     # stitch(req_path)
     
-    stitch_local("/datadrive/codes/retail/cvtoolkit/download/Fem Care")
+    stitch_local("/datadrive/codes/opensource/features/LightGlue/assets/arstitch")
     
