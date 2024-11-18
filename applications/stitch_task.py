@@ -517,6 +517,7 @@ def stitch_local(img_folder):
         cv2.warpPerspective(img, H, (pw, ph), pano, borderMode=cv2.BORDER_TRANSPARENT)
 
     cv2.imwrite("stitch.jpg", pano)
+    return pano
 
 
 
@@ -556,10 +557,33 @@ def stitch(req_path):
     cv2.imwrite("stitch.jpg", pano)
 
 
+# Read video frames and save them as images
+def stitch_video(video_file:str):
+    basename = os.path.basename(video_file).split(".")[0]
+    print("basename: ", basename)
+    output_folder = os.path.join(os.path.dirname(video_file), basename, "frames")
+    os.makedirs(output_folder, exist_ok=True)
+    cap = cv2.VideoCapture(video_file)
+    count = 0
+    sep = 15
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if count % sep == 0:
+            cv2.imwrite(f"{output_folder}/{count}.jpg", frame)
+        count += 1
+    cap.release()
+    cv2.destroyAllWindows()
+    print("total frames: ", count)
+    
+    pano = stitch_local(output_folder)
+    return pano
+    
 
 if __name__ == "__main__":
     # req_path = "/datadrive/codes/opensource/features/LightGlue/assets/uspg_test_jsons/4c89ccd3-5978-4d74-8764-7daf9d35cdda_input.json"
     # stitch(req_path)
     
-    stitch_local("/datadrive/codes/opensource/features/LightGlue/assets/arstitch")
-    
+    # stitch_local("/datadrive/codes/opensource/features/LightGlue/assets/arstitch")
+    stitch_video("/datadrive/codes/retail/ultralytics/stitch/data/7.mp4")
