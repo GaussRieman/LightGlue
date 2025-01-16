@@ -14,6 +14,7 @@ import time
 import retrying
 import requests
 import multiprocessing as mp
+import tqdm
 
 
 
@@ -119,7 +120,7 @@ def process_df(df: pd.DataFrame, shard:str, extractor, matcher):
     
     df_res = pd.DataFrame(columns=['img_url', 'sku_code', 'x', 'y'])
     
-    for img_url in img_urls:
+    for img_url in tqdm.tqdm(img_urls):
         try:
             base_name = img_url.split("/")[-1]
             base_name = base_name.split(".")[0]
