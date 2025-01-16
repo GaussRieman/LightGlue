@@ -13,6 +13,7 @@ import json
 import time
 import retrying
 import requests
+import multiprocessing as mp
 
 
 
@@ -112,6 +113,7 @@ def process_image(src_img: np.ndarray, rectified_img: np.ndarray, rectified_pts:
 
 
 def process_df(df: pd.DataFrame, shard:str, extractor, matcher):
+    t0 = time.time()
     img_urls = df['image_url'].unique()
     print(f"Total images: {len(img_urls)}")
     
@@ -149,6 +151,8 @@ def process_df(df: pd.DataFrame, shard:str, extractor, matcher):
 
 
     df_res.to_csv(f"output/data_shard_{shard}.csv", index=False)
+    t1 = time.time()
+    print("Processing time: ", (t1 - t0))
 
         # img = draw_pts(img, reverse_pts)
         # cv2.imwrite(f"output/{base_name}.jpg", img)
@@ -163,18 +167,22 @@ def process_csv(csv_path: str, extractor, matcher):
     SHARD_SIZE = 10000
     shards = len(df)//SHARD_SIZE + 1
     print("Total shards: ", shards)
+
     for i in range(shards):
+        print(f"Processing shard: {i}")
         start = i*SHARD_SIZE
         end = min((i+1)*SHARD_SIZE, len(df))
         df_shard = df.iloc[start:end]
         process_df(df_shard, str(i), extractor, matcher)
     
 
-def main():
+def main(*args, **kwargs):
     # ALIKED+LightGlue
     extractor_aliked = ALIKED(max_num_keypoints=2048).eval().cuda()  # load the extractor
     matcher_aliked = LightGlue(features='aliked').eval().cuda()  # load the matcher
     csv_path = "/datadrive/codes/opensource/features/LightGlue/data/reverse/LM_sku_locations.csv"
+    if args:
+        csv_path = args[0]
     process_csv(csv_path, extractor_aliked, matcher_aliked)
     
     
