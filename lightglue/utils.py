@@ -128,6 +128,12 @@ def load_image(path: Path, resize: int = None, **kwargs) -> torch.Tensor:
     return numpy_image_to_torch(image)
 
 
+def load_numpy_image(image:np.ndarray, resize: int = None, **kwargs) -> torch.Tensor:
+    if resize is not None:
+        image, _ = resize_image(image, resize, **kwargs)
+    return numpy_image_to_torch(image)
+
+
 class Extractor(torch.nn.Module):
     def __init__(self, **conf):
         super().__init__()
