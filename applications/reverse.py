@@ -80,6 +80,8 @@ def process_image(src_img: np.ndarray, rectified_img: np.ndarray, rectified_pts:
         
         feats0 = extractor.extract(img0)
         feats1 = extractor.extract(img1)
+        print("feats0: ", feats0['keypoints'].shape)
+        print("feats1: ", feats1['keypoints'].shape)
         
         matches01 = matcher({'image0': feats0, 'image1': feats1})
         feats0, feats1, matches01 = [rbd(x) for x in [feats0, feats1, matches01]]
@@ -91,17 +93,6 @@ def process_image(src_img: np.ndarray, rectified_img: np.ndarray, rectified_pts:
         dst_pts = np.float32(points1.cpu().numpy()).reshape(-1, 1, 2)
         
         M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-        matchesMask = mask.ravel().tolist()
-        
-        inliers = 0
-        inlier_src_pts = []
-        inlier_dst_pts = []
-        for i in range(len(matchesMask)):
-            if matchesMask[i] == 1:
-                inliers += 1
-                inlier_src_pts.append(src_pts[i])
-                inlier_dst_pts.append(dst_pts[i])
-        print("inliers: ", inliers, inliers/len(matchesMask))
         
         # reverse the transformation
         img = cv2.warpPerspective(rectified_img, np.linalg.inv(M), (src_img.shape[1], src_img.shape[0]))
@@ -109,13 +100,15 @@ def process_image(src_img: np.ndarray, rectified_img: np.ndarray, rectified_pts:
         return img, reverse_pts
     except Exception as e:
         print("Error: ", e)
+        h,w = rectified_img[0:2]
+        
         return rectified_img, rectified_pts
 
 
 
 def process_df(df: pd.DataFrame, shard:str, extractor, matcher):
     t0 = time.time()
-    img_urls = df['image_url'].unique()
+    img_urls = df['image'].unique()
     print(f"Total images: {len(img_urls)}")
     
     df_res = pd.DataFrame(columns=['img_url', 'sku_code', 'x', 'y'])
@@ -124,14 +117,16 @@ def process_df(df: pd.DataFrame, shard:str, extractor, matcher):
         try:
             base_name = img_url.split("/")[-1]
             base_name = base_name.split(".")[0]
-            img_df = df[df['image_url'] == img_url]
+            img_df = df[df['image'] == img_url]
             
-            sku_codes = img_df['skucode'].values
+            sku_codes = img_df['sku_code'].values
             src_img_url = img_url
             rectified_img_url = img_df['stitched_image'].values[0]
             
             src_img = download_image(src_img_url)
+            print("src_img: ", src_img.shape)
             rectified_img = download_image(rectified_img_url)
+            print("rectified_img: ", rectified_img.shape)
             xs = img_df['x'].values
             ys = img_df['y'].values
             xs = xs*rectified_img.shape[1]
@@ -151,7 +146,7 @@ def process_df(df: pd.DataFrame, shard:str, extractor, matcher):
             continue
 
 
-    df_res.to_csv(f"output/data_shard_{shard}.csv", index=False)
+    df_res.to_csv(f"output2/data_shard_{shard}.csv", index=False)
     t1 = time.time()
     print("Processing time: ", (t1 - t0))
 
@@ -162,7 +157,7 @@ def process_df(df: pd.DataFrame, shard:str, extractor, matcher):
 
 def process_csv(csv_path: str, extractor, matcher):
     df = pd.read_csv(csv_path)
-    print("Total boxes: ", len(df))
+    print("Total boxes: ", len(df), df.columns)
     
     # process by shards
     SHARD_SIZE = 10000
@@ -177,13 +172,12 @@ def process_csv(csv_path: str, extractor, matcher):
         process_df(df_shard, str(i), extractor, matcher)
     
 
-def main(*args, **kwargs):
+def main():
     # ALIKED+LightGlue
     extractor_aliked = ALIKED(max_num_keypoints=2048).eval().cuda()  # load the extractor
     matcher_aliked = LightGlue(features='aliked').eval().cuda()  # load the matcher
-    csv_path = "/datadrive/codes/opensource/features/LightGlue/data/reverse/LM_sku_locations.csv"
-    if args:
-        csv_path = args[0]
+    csv_path = "/datadrive/codes/opensource/features/LightGlue/data/reverse/extract/sub_1.csv"
+    # csv_path = "/datadrive/codes/opensource/features/LightGlue/data/reverse/LM_sku_locations.csv"
     process_csv(csv_path, extractor_aliked, matcher_aliked)
     
     

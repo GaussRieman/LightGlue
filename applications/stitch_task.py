@@ -196,6 +196,7 @@ def adjust_by_pov(Hs, corners):
             best_score = score
             best_pov = pov
 
+    best_pov = np.linalg.inv(Hs[0])
     logger.info(f'==> Best PoV score: {best_score:.3f}')
     if (best_score <= 0.01):
         logger.warning(f'ERROR: Low best pov score!')
@@ -272,6 +273,7 @@ def calculate_homography(imgs):
 
 def rectify_horizontally(homographies, corners):
     ## Get edges
+    print("Rectify horizontally")
     left_pts, right_pts = [], []
     for H in homographies:
         warp_corners = cv2.perspectiveTransform(corners, H).reshape(-1, 2)
@@ -363,8 +365,7 @@ def rectify_horizontally(homographies, corners):
 
 
 def rectify_vertically(homographies, corners):
-
-
+    print("Rectify vertically")
     ## Get edges
     top_pts, bottom_pts = [], []
     for H in homographies:
@@ -441,6 +442,7 @@ def rectify_vertically(homographies, corners):
         return homographies
     polys.sort(key=lambda x: x[0])
     area, poly = polys[0]
+    print("area: ", area)
     if area > w * h:
         return homographies
 
@@ -505,7 +507,7 @@ def stitch_local(img_folder):
     Hs = adjust_by_pov(Hs, corners)
     Hs, l, t, pw, ph = adjust_roi(Hs, corners, 10000)
     Hs = rectify_horizontally(Hs, corners)
-    Hs = rectify_vertically(Hs, corners)
+    # Hs = rectify_vertically(Hs, corners)
     Hs, l, t, pw, ph = adjust_roi(Hs, corners, 10000)
     
     ## Generate panorama
@@ -565,7 +567,7 @@ def stitch_video(video_file:str):
     os.makedirs(output_folder, exist_ok=True)
     cap = cv2.VideoCapture(video_file)
     count = 0
-    sep = 15
+    sep = 5
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -574,7 +576,6 @@ def stitch_video(video_file:str):
             cv2.imwrite(f"{output_folder}/{count}.jpg", frame)
         count += 1
     cap.release()
-    cv2.destroyAllWindows()
     print("total frames: ", count)
     
     pano = stitch_local(output_folder)
@@ -585,5 +586,5 @@ if __name__ == "__main__":
     # req_path = "/datadrive/codes/opensource/features/LightGlue/assets/uspg_test_jsons/4c89ccd3-5978-4d74-8764-7daf9d35cdda_input.json"
     # stitch(req_path)
     
-    # stitch_local("/datadrive/codes/opensource/features/LightGlue/assets/arstitch")
-    stitch_video("/datadrive/codes/retail/ultralytics/stitch/data/7.mp4")
+    # stitch_local("/datadrive/codes/opensource/features/LightGlue/data/stitch/part2")
+    stitch_video("/datadrive/codes/opensource/features/LightGlue/data/video/103101.mp4")

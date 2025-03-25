@@ -6,6 +6,8 @@
 assets/
 output/
 stitch_hard/
+output/
+output1/
 
 # imgs
 *.jpg

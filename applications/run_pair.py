@@ -1,3 +1,6 @@
+import sys
+sys.path.append("/datadrive/codes/opensource/features/LightGlue")
+
 from lightglue import LightGlue, SuperPoint, DISK, SIFT, ALIKED
 from lightglue.utils import load_image, rbd
 import numpy as np
@@ -14,8 +17,9 @@ extractor_sift = SIFT(max_num_keypoints=2048).eval().cuda()  # load the extracto
 matcher_sift = LightGlue(features='sift').eval().cuda()  # load the matcher
 
 # load each image as a torch.Tensor on GPU with shape (3,H,W), normalized in [0,1]
-img0_path = "/datadrive/codes/opensource/features/LightGlue/assets/CAPG/3.jpg"
-img1_path = "/datadrive/codes/opensource/features/LightGlue/assets/CAPG/4.jpg"
+img0_path = "/datadrive/codes/opensource/features/LightGlue/data/reverse/177ccead-00c9-4824-ad26-9ee7ab01c503_3xnswd9o8ehntnoyk16kr8mb_0_[B@907d820_rectified.jpg"
+img1_path = "/datadrive/codes/opensource/features/LightGlue/data/reverse/177ccead-00c9-4824-ad26-9ee7ab01c503_3xnswd9o8ehntnoyk16kr8mb_0_[B@907d820.jpg"
+
 # size = (640, 480)
 image0 = load_image(img0_path).cuda()
 image1 = load_image(img1_path).cuda()
@@ -65,6 +69,11 @@ for name, extractor, matcher in zip(names, extractors, matchers):
             inlier_src_pts.append(src_pts[i])
             inlier_dst_pts.append(dst_pts[i])
     print("inliers: ", inliers, inliers/len(matchesMask))
+    
+    
+    # transform the image
+    img = cv2.warpPerspective(cv2.imread(img0_path), np.linalg.inv(M), (cv2.imread(img1_path).shape[1], cv2.imread(img1_path).shape[0]))
+    cv2.imwrite(f"output/rev_{name}.jpg", img)
 
     #stitching  
     img0 = cv2.imread(img0_path)  

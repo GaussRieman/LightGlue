@@ -34,9 +34,9 @@ from utils.faster_infer import TritonClientGRPC, UnitDetector
 
 # Parameters and constants
 TRT_URL = os.environ.get("TRT_URL", "localhost:8001")
-VALIAD_POINTS_THRESHOLD = 0.3 # % of the points should be valid after filtering
+VALIAD_POINTS_THRESHOLD = 0.1 # % of the points should be valid after filtering
 DEDUPE_IOU_THRESHOLD = 0.5 # % of the points should be valid after filtering
-Y_GAP_RATIO_THRESHOLD = 0.7 # % of the gap ratio along the y-axis
+Y_GAP_RATIO_THRESHOLD = 0.72 # % of the gap ratio along the y-axis
 MEAN_DIFF_THRESHOLD = 0.005 # 3/640=0.0046875, toleration of the gap along the y-axis
 
 
@@ -727,10 +727,10 @@ def main():
     
     
     # Process a folder
-    img_dir = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/osa_images/Fem Care"
+    img_dir = "/datadrive/codes/opensource/features/LightGlue/data/dedupe/osa1"
     model_name = "unit_hpc_yolo_v5"
     model_version = "20230107"
-    feature_type = "ALIKED" # ALIKED, ORB, SIFT
+    feature_type = "SIFT" # ALIKED, ORB, SIFT
     process_image_folder(img_dir, model_name, model_version, feature_type)
     
     
