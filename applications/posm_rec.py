@@ -18,9 +18,9 @@ extractor_sp = SuperPoint(max_num_keypoints=1024).eval().cuda()  # load the extr
 matcher_sp = LightGlue(features='superpoint').eval().cuda()  # load the matcher
 
 # load each image as a torch.Tensor on GPU with shape (3,H,W), normalized in [0,1]
-img0_path = "/datadrive/codes/opensource/features/LightGlue/data/posm/2095685784a7ae6322baff5019327426.jpg"
+img0_path = "/datadrive/codes/opensource/features/LightGlue/data/posm/images/d4f8e549a5e2d42cdc30818e546192de.jpg"
 # img0_path = "/datadrive/codes/opensource/features/LightGlue/applications/stitch.jpg"
-img1_path = "/datadrive/codes/opensource/features/LightGlue/data/posm/BB14F9B1-788A-4CB5-B391-90CEBD166022.png"
+img1_path = "/datadrive/codes/opensource/features/LightGlue/data/posm/POCM/4445852.png"
 
 size = (320, 240)
 image0 = load_image(img0_path, resize=size).cuda()

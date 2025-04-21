@@ -32,6 +32,10 @@ matcher_aliked = LightGlue(features='aliked').eval().cuda()  # load the matcher
 extractor_sift = SIFT(max_num_keypoints=2048).eval().cuda()  # load the extractor
 matcher_sift = LightGlue(features='sift').eval().cuda()  # load the matcher
 
+#SuperPoint+LightGlue
+extractor_superpoint = SuperPoint(max_num_keypoints=2048).eval().cuda()  # load the extractor
+matcher_superpoint = LightGlue(features='superpoint').eval().cuda()  # load the matcher
+
 # extractor_aliked = extractor_sift
 # matcher_aliked = matcher_sift
 
@@ -460,7 +464,8 @@ def rectify_vertically(homographies, corners):
 
 def sort_key_func(item):  
     base_name = os.path.basename(item)  # get file name with extension  
-    num = os.path.splitext(base_name)[0]  # remove extension  
+    num = os.path.splitext(base_name)[0]  # remove extension
+    num = num.split("_")[-1]  # get the number part after the last underscore
     return int(num)  
 
 
@@ -483,12 +488,135 @@ def read_local_imgs(img_path):
     return imgs
 
 
+def get_polygon_from_json(json_file:str, img_idx:int=0):
+    """
+    从 JSON 文件中获取多边形坐标
+    :param data: JSON 数据
+    :param img_idx: 图像索引
+    :return: 多边形坐标数组
+    """
+    corners = []
+    data = json.load(open(json_file))
+    print("data:", len(data))
+    
+    d = data[img_idx]
+    annotations = d['annotations']
+    label_results = annotations[0]['result']
+    
+    pts = label_results[0]['value']['points']
+    ori_h = label_results[0]['original_height']
+    ori_w = label_results[0]['original_width']
+    print("ori_h:", ori_h, "ori_w:", ori_w)
+    
+    for pt in pts:
+        x = int(pt[0] / 100 * ori_w)
+        y = int(pt[1] / 100 * ori_h)
+        corners.append([x, y])
+    corners = np.array(corners, dtype=np.int32)
+    # print("corners:", corners)
+    
+    return corners
+
+
+def map_from_img_to_pano(H, sx, sy):
+    H_inv = np.linalg.inv(H).astype(np.float32)
+    x = sx * H_inv[0, 0] + sy * H_inv[0, 1] + H_inv[0, 2]
+    y = sx * H_inv[1, 0] + sy * H_inv[1, 1] + H_inv[1, 2]
+    z = sx * H_inv[2, 0] + sy * H_inv[2, 1] + H_inv[2, 2]
+    return x / z, y / z
+
+
+def non_planar_warp(
+    images,            # List[np.ndarray] or list of JPEG bytes
+    homographies,      # List[np.ndarray]
+    polygon,           # np.ndarray, shape (N, 2), in pano space
+    output_height=300,  # Desired height of output image
+    output_width=600  # Desired width of output image
+):
+    # Step 1: determine output panorama width from polygon
+    polygon = np.array(polygon, dtype=np.float32)
+    pano_width = int(np.max(polygon[:, 0]) - np.min(polygon[:, 0]))
+    if pano_width <= 0:
+        raise ValueError("Invalid polygon width. Cannot proceed with non-planar warp.")
+    pano_height = int(np.max(polygon[:, 1]) - np.min(polygon[:, 1]))
+    if pano_height <= 0:
+        raise ValueError("Invalid polygon height. Cannot proceed with non-planar warp.")
+        
+    print("pano_width, pano_height: ", pano_width, pano_height)
+
+    # Step 2: extract top_ys and bottom_ys from polygon mask
+    scale = 1  # No scaling for the moment
+    if polygon is None or len(polygon) == 0:
+        raise ValueError("Polygon is empty or None. Cannot proceed with non-planar warp.")
+    
+    # Create mask with full pano height and width
+    poly_mask = np.zeros((pano_height * scale, pano_width), dtype=np.uint8)
+    scaled_poly = np.array([(x, y * scale) for x, y in polygon], dtype=np.int32)
+    if scaled_poly.shape[0] < 3:
+        raise ValueError("Polygon must have at least 3 points to form a valid shape.")
+    
+    # Fill the polygon into the mask (binary image)
+    cv2.fillPoly(poly_mask, [scaled_poly], 255)
+    # Debugging: check the mask
+    cv2.imwrite("poly_mask.jpg", poly_mask)
+
+    top_ys = np.zeros(pano_width, dtype=np.float32)
+    bottom_ys = np.zeros(pano_width, dtype=np.float32)
+    for x in range(pano_width):
+        column = poly_mask[:, x]
+        ys = np.where(column > 0)[0]
+        if len(ys) > 0:
+            top_ys[x] = ys[0] / scale  # Use scale to correct for any mismatch
+            bottom_ys[x] = ys[-1] / scale
+        else:
+            top_ys[x] = pano_height / 2
+            bottom_ys[x] = pano_height / 2
+
+    # Step 3: compute sx and sy map
+    height_diff = bottom_ys - top_ys
+    height_diff[height_diff <= 0] = 1e-6  # Avoid zero difference
+    rectified_xs = np.cumsum(height_diff)
+    rectified_xs *= (pano_width - 1) / rectified_xs[-1]
+    sx = rectified_xs.reshape(1, -1)
+
+    interp_top = np.interp(sx[0], np.arange(pano_width), top_ys)
+    interp_bottom = np.interp(sx[0], np.arange(pano_width), bottom_ys)
+    sx = np.repeat(sx, pano_height, axis=0)
+
+    # Linear interpolation of y positions
+    a = (interp_bottom - interp_top) / (pano_height - 1)
+    b = interp_top
+    sy = np.arange(pano_height, dtype=np.float32).reshape(-1, 1)
+    sy = np.repeat(sy, pano_width, axis=1)
+    sy = a.reshape(1, -1) * sy + b.reshape(1, -1)
+
+    # Step 4: warp images onto pano
+    pano = np.zeros((pano_height, pano_width, 3), dtype=np.uint8)
+    for img, H in zip(images, homographies):
+        if isinstance(img, bytes):
+            img = cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            continue
+        
+        # Map each image to the new panoramic coordinates
+        img_x, img_y = map_from_img_to_pano(H, sx, sy)
+        
+        # Ensure type and reshape for remap
+        img_x = img_x.astype(np.float32).reshape(pano.shape[:2])
+        img_y = img_y.astype(np.float32).reshape(pano.shape[:2])
+
+        # Apply remap to each image and place it into the output pano
+        cv2.remap(img, img_x, img_y, interpolation=cv2.INTER_CUBIC, dst=pano, borderMode=cv2.BORDER_TRANSPARENT)
+
+    return pano
+
+
 
 def stitch_local(img_folder):
     imgs= read_local_imgs(img_folder)
     print("imgs: ", len(imgs))
     img_size = imgs[0].shape[1], imgs[0].shape[0]
-    # print("Hs: ", Hs)
+
     t0 = time.time()
     new_Hs = calculate_homography(imgs)
     t1 = time.time()
@@ -507,7 +635,7 @@ def stitch_local(img_folder):
     Hs = adjust_by_pov(Hs, corners)
     Hs, l, t, pw, ph = adjust_roi(Hs, corners, 10000)
     Hs = rectify_horizontally(Hs, corners)
-    # Hs = rectify_vertically(Hs, corners)
+    Hs = rectify_vertically(Hs, corners)
     Hs, l, t, pw, ph = adjust_roi(Hs, corners, 10000)
     
     ## Generate panorama
@@ -518,8 +646,8 @@ def stitch_local(img_folder):
     for img, H in zip(imgs, Hs):
         cv2.warpPerspective(img, H, (pw, ph), pano, borderMode=cv2.BORDER_TRANSPARENT)
 
-    cv2.imwrite("stitch.jpg", pano)
-    return pano
+    cv2.imwrite("stitch_local.jpg", pano)
+    return pano, imgs, Hs
 
 
 
@@ -586,5 +714,13 @@ if __name__ == "__main__":
     # req_path = "/datadrive/codes/opensource/features/LightGlue/assets/uspg_test_jsons/4c89ccd3-5978-4d74-8764-7daf9d35cdda_input.json"
     # stitch(req_path)
     
-    # stitch_local("/datadrive/codes/opensource/features/LightGlue/data/stitch/part2")
-    stitch_video("/datadrive/codes/opensource/features/LightGlue/data/video/103101.mp4")
+    pano, imgs, Hs = stitch_local("/datadrive/codes/opensource/features/LightGlue/data/rectify/exps")
+    
+    # json_file = "/datadrive/codes/opensource/features/LightGlue/data/reverse/seg2.json" # reverse folder
+    json_file = "/datadrive/codes/opensource/features/LightGlue/data/rectify/seg4.json"
+    poly = get_polygon_from_json(json_file, 3)
+    # print("poly: ", poly)
+    pano_h, pano_w = pano.shape[:2]
+    pano = non_planar_warp(imgs, Hs, poly, pano_h, pano_w)
+    cv2.imwrite("stitch_non_planar.jpg", pano)
+    # stitch_video("/datadrive/codes/opensource/features/LightGlue/data/video/103101.mp4")
